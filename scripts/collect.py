@@ -18,6 +18,10 @@ NAME_TOP3_SHARE=.6       # 上位3か国に6割以上が集まる語尾・語頭
 NAME_COUNTRY_CAP=15      # 過半数が同じ国にある問題はその国ごとに15問まで
 # Wikidataの「種類」（P31の値）から作る問題。1か国に偏った種類は国の輪郭が浮かぶだけなので除く。
 CLASS_MAX_COUNTRY_SHARE=.5
+# Wikidata全体と同じような分布（欧米に固まるだけ）の種類は除く。
+CLASS_MAX_BASE_SIMILARITY=.9
+# 地図で当てられる「もの」に限るため、これらのどれかの下位分類（P279*）にあたる種類だけを使う。
+CLASS_ROOTS={'Q618123':'地理的な地物','Q811979':'建築構造物','Q13226383':'施設'}
 QLEVER='https://qlever.cs.uni-freiburg.de/api/wikidata'
 NAME_MAX_JACCARD=.4      # 地点の4割以上が重なる問題は片方だけ
 NAME_LOOKALIKE_CAP=3     # 見た目がほぼ同じ分布（指紋の類似度.97以上）の問題は3問まで
@@ -188,9 +192,6 @@ def collect_earth():
   ('1964年以降に噴火した火山',volcano(lambda r:r['Last Known']=='D1')),
   ('標高4000m以上の火山',volcano(lambda r:num(r['Elev'],0)>=4000)),
  ]
-def sparql(query):
- url='https://query.wikidata.org/sparql?'+urllib.parse.urlencode({'query':query,'format':'json'})
- return json.loads(get(url,'application/sparql-results+json'))['results']['bindings']
 def collect_wikidata():
  # 公式の窓口(query.wikidata.org)は混雑時に強く制限されるため、QLeverに問い合わせる。
  out=[]
@@ -228,6 +229,10 @@ def collect_wikidata_classes():
   label=re.sub(r'^"|"@ja$','',label)
   classes.setdefault(qid,label)
  print('Wikidata classes in range',len(classes),flush=True)
+ roots=' '.join('wd:'+q for q in CLASS_ROOTS)
+ allowed={row[0] for row in qlever(f'SELECT DISTINCT ?class WHERE {{ VALUES ?root {{ {roots} }} ?class wdt:P279* ?root }}') if row}
+ classes={q:l for q,l in classes.items() if q in allowed}
+ print('Wikidata classes under roots',len(classes),flush=True)
  coords=collections.defaultdict(dict);country=collections.defaultdict(dict)
  ids=sorted(classes)
  for start in range(0,len(ids),300):
@@ -301,23 +306,39 @@ def write_summary(kept):
  lines+=[f'| {n} | {c} | {r} |' for n,c,r in report[:3000]]
  with open(path,'a',encoding='utf-8') as f:f.write('\n'.join(lines)+'\n')
 def main():
- candidates=[]
- for fn in (collect_airports,collect_power_plants,collect_natural_earth,collect_earth,collect_wikidata,collect_wikidata_classes):
-  try:
-   for name,coords in fn():
-    if name in EXCLUDE:note(name,len(coords),'除外: '+EXCLUDE[name]);continue
-    points=grid(coords)
-    if len(points)<MIN_POINTS:note(name,len(points),f'除外: {MIN_POINTS}点未満');continue
-    if len(points)>MAX_POINTS:note(name,len(points),f'除外: {MAX_POINTS}点超');continue
-    candidates.append({'name':name,'points':points})
-  except Exception as e:note(fn.__name__,'-',f'取得失敗: {e}')
- # 点数の少ない（＝特徴が出やすい）候補を優先して残す。
- kept=[];fps=[]
- for item in sorted(candidates,key=lambda x:len(x['points'])):
-  fp=fingerprint(item['points'])
-  similar=[kept[i]['name'] for i,other in enumerate(fps) if similarity(fp,other)>=SIMILARITY_THRESHOLD]
-  if similar:note(item['name'],len(item['points']),f'除外: {similar[0]}と分布が類似');continue
-  kept.append(item);fps.append(fp);note(item['name'],len(item['points']),'採用')
+ def gather(sources):
+  out=[]
+  for fn in sources:
+   try:
+    for name,coords in fn():
+     if name in EXCLUDE:note(name,len(coords),'除外: '+EXCLUDE[name]);continue
+     points=grid(coords)
+     if len(points)<MIN_POINTS:note(name,len(points),f'除外: {MIN_POINTS}点未満',quiet=True);continue
+     if len(points)>MAX_POINTS:note(name,len(points),f'除外: {MAX_POINTS}点超',quiet=True);continue
+     out.append({'name':name,'points':points})
+   except Exception as e:note(fn.__name__,'-',f'取得失敗: {e}')
+  return out
+ kept=[];fps=[];names=set()
+ def add(items,budget=math.inf):
+  for item in items:
+   if len(kept)>=budget:break
+   if item['name'] in names:continue
+   fp=fingerprint(item['points'])
+   similar=[kept[i]['name'] for i,other in enumerate(fps) if similarity(fp,other)>=SIMILARITY_THRESHOLD]
+   if similar:note(item['name'],len(item['points']),f'除外: {similar[0]}と分布が類似',quiet=True);continue
+   kept.append(item);fps.append(fp);names.add(item['name']);note(item['name'],len(item['points']),'採用')
+ # 条件を決めて作った問題を先に入れる。点数の少ない（＝特徴が出やすい）候補を優先する。
+ add(sorted(gather((collect_airports,collect_power_plants,collect_natural_earth,collect_earth,collect_wikidata)),key=lambda x:len(x['points'])))
+ # Wikidataの種類は、全体の分布から離れている（特徴のある）ものから、地名パターンの枠を残して入れる。
+ classes=gather((collect_wikidata_classes,))
+ if classes:
+  base=fingerprint([p for c in classes for p in c['points']])
+  scored=[]
+  for c in classes:
+   sim=similarity(fingerprint(c['points']),base)
+   if sim>=CLASS_MAX_BASE_SIMILARITY:note(c['name'],len(c['points']),'除外: Wikidata全体と似た分布',quiet=True)
+   else:scored.append((sim,c))
+  add([c for _,c in sorted(scored,key=lambda x:x[0])],TARGET-NAME_BUDGET)
  try:kept+=select_place_names(min(NAME_BUDGET,TARGET-len(kept)),fps)
  except Exception as e:note('地名パターン','-',f'取得失敗: {e}')
  write_summary(kept)
