@@ -1,5 +1,5 @@
 """Build static question bundle; network is required only when running this script."""
-import collections, csv, io, json, math, os, re, tarfile, time, unicodedata, urllib.parse, urllib.request
+import collections, csv, io, json, math, os, re, tarfile, time, unicodedata, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 # 目標の問題数。施設・自然などの問題を先に入れ、残りを地名パターンの問題で埋める。
@@ -192,23 +192,31 @@ def sparql(query):
  url='https://query.wikidata.org/sparql?'+urllib.parse.urlencode({'query':query,'format':'json'})
  return json.loads(get(url,'application/sparql-results+json'))['results']['bindings']
 def collect_wikidata():
+ # 公式の窓口(query.wikidata.org)は混雑時に強く制限されるため、QLeverに問い合わせる。
  out=[]
  for name,where in WIKIDATA.items():
   try:
    coords=[]
-   for item in sparql(f'SELECT DISTINCT ?item ?coord WHERE {{ {where} }} LIMIT {MAX_POINTS*2}'):
-    m=re.fullmatch(r'Point\((-?[\d.]+) (-?[\d.]+)\)',item['coord']['value'])
+   for row in qlever(f'SELECT DISTINCT ?item ?coord WHERE {{ {where} }} LIMIT {MAX_POINTS*2}'):
+    m=re.fullmatch(r'"Point\((-?[\d.eE+-]+) (-?[\d.eE+-]+)\)"(\^\^\S+)?',row[1]) if len(row)>1 else None
     if m:coords.append((float(m.group(2)),float(m.group(1))))
    out.append((name,coords))
   except Exception as e:note(name,'-',f'取得失敗: {e}')
-  time.sleep(1)
  return out
 def qlever(query):
  """QLeverのWikidata窓口にSPARQLを投げ、TSVの行を返す。"""
- prefixes='PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> '
- req=urllib.request.Request(QLEVER,data=urllib.parse.urlencode({'query':prefixes+query}).encode(),headers={'User-Agent':'DotGlobeQuestionCollector/1.0 (GitHub Pages static dataset)','Accept':'text/tab-separated-values','Content-Type':'application/x-www-form-urlencoded'})
- with urllib.request.urlopen(req,timeout=600) as r:lines=r.read().decode('utf-8').splitlines()
- return [line.split('\t') for line in lines[1:]]
+ prefixes='PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> '
+ url=QLEVER
+ for _ in range(3):
+  req=urllib.request.Request(url,data=urllib.parse.urlencode({'query':prefixes+query}).encode(),headers={'User-Agent':'DotGlobeQuestionCollector/1.0 (GitHub Pages static dataset)','Accept':'text/tab-separated-values','Content-Type':'application/x-www-form-urlencoded'})
+  try:
+   with urllib.request.urlopen(req,timeout=600) as r:lines=r.read().decode('utf-8').splitlines()
+   return [line.split('\t') for line in lines[1:]]
+  except urllib.error.HTTPError as e:
+   # urllibはPOSTの307/308をたどらないので、移転先に送り直す。
+   if e.code not in (307,308) or not e.headers.get('Location'):raise
+   url=urllib.parse.urljoin(url,e.headers['Location']);print('QLever redirect',url,flush=True)
+ raise RuntimeError('QLever: too many redirects')
 def collect_wikidata_classes():
  """日本語名のあるWikidataの種類のうち、座標付きの項目が範囲内の数あるものを候補にする。"""
  classes={}
