@@ -198,8 +198,8 @@ def collect_wikidata():
   try:
    coords=[]
    for row in qlever(f'SELECT DISTINCT ?item ?coord WHERE {{ {where} }} LIMIT {MAX_POINTS*2}'):
-    m=re.fullmatch(r'"Point\((-?[\d.eE+-]+) (-?[\d.eE+-]+)\)"(\^\^\S+)?',row[1]) if len(row)>1 else None
-    if m:coords.append((float(m.group(2)),float(m.group(1))))
+    p=wkt_point(row[1]) if len(row)>1 else None
+    if p:coords.append(p)
    out.append((name,coords))
   except Exception as e:note(name,'-',f'取得失敗: {e}')
  return out
@@ -217,6 +217,10 @@ def qlever(query):
    if e.code not in (307,308) or not e.headers.get('Location'):raise
    url=urllib.parse.urljoin(url,e.headers['Location']);print('QLever redirect',url,flush=True)
  raise RuntimeError('QLever: too many redirects')
+def wkt_point(text):
+ """WKTの "POINT(経度 緯度)" を(緯度, 経度)にする。月や火星など地球以外の座標は "<天体のIRI> Point(...)" の形になるので除く。"""
+ m=re.fullmatch(r'"?point\((-?[\d.eE+-]+) (-?[\d.eE+-]+)\)"?(\^\^\S+)?',text.strip(),re.I)
+ return (float(m.group(2)),float(m.group(1))) if m else None
 def collect_wikidata_classes():
  """日本語名のあるWikidataの種類のうち、座標付きの項目が範囲内の数あるものを候補にする。"""
  classes={}
@@ -228,11 +232,11 @@ def collect_wikidata_classes():
  ids=sorted(classes)
  for start in range(0,len(ids),300):
   values=' '.join(ids[start:start+300])
-  for row in qlever(f'SELECT ?class ?item ?coord ?country WHERE {{ VALUES ?class {{ {values} }} ?item wdt:P31 ?class . ?item wdt:P625 ?coord . OPTIONAL {{ ?item wdt:P17 ?country }} }}'):
-   if len(row)<3:continue
-   # 月や火星など地球以外の座標は "<天体のIRI> Point(...)" の形になるので、Point(...)だけのものを使う。
-   m=re.fullmatch(r'"Point\((-?[\d.eE+-]+) (-?[\d.eE+-]+)\)"(\^\^\S+)?',row[2])
-   if m:coords[row[0]][row[1]]=(float(m.group(2)),float(m.group(1)));country[row[0]].setdefault(row[1],row[3] if len(row)>3 else '')
+  rows=qlever(f'SELECT ?class ?item ?coord ?country WHERE {{ VALUES ?class {{ {values} }} ?item wdt:P31 ?class . ?item wdt:P625 ?coord . OPTIONAL {{ ?item wdt:P17 ?country }} }}')
+  if start==0:print('QLever sample rows',rows[:3],flush=True)
+  for row in rows:
+   p=wkt_point(row[2]) if len(row)>2 else None
+   if p:coords[row[0]][row[1]]=p;country[row[0]].setdefault(row[1],row[3] if len(row)>3 else '')
  out=[]
  for qid,label in classes.items():
   items=coords.get(qid,{})
