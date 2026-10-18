@@ -4,17 +4,25 @@ GitHub Pagesで遊べる、点群から地理的な対象を当てる4択クイ�
 
 ## 公開
 
-1. Settings → Pages → Source を **GitHub Actions** にします。
-2. Actions → Publish Dot Globe の実行結果から公開URLを確認します。
+`main`へのpushで Actions → **Publish Dot Globe** が走り、サイトのファイルを`gh-pages`ブランチに書き出します。公開URLは `https://makitsukasa.github.io/dot-globe/` です。Pagesの公開元は`gh-pages`ブランチ（ルート）です。
 
-`index.html`にはオフライン用の8問を同梱しています。`questions.json`が存在すれば公開時に自動で読み込みます。
+`index.html`にはオフライン用の8問を同梱しています。`questions.json`が存在すれば自動で読み込みます。
 
 ## 問題データの生成
 
-Actions → **Refresh question data** → Run workflow を実行します。Wikidataと空港の公開データをGitHub Actions上で取得し、`questions.json`を生成・コミットします。コミット後はPagesの再デプロイが走ります。外部APIが失敗して4問未満になった場合、既存ファイルは上書きしません。初回の収集が成功するまでは8問版です。
+`python scripts/collect.py` で`questions.json`を生成します。Actions → **Refresh question data** → Run workflow でも実行でき、生成結果が`main`にコミットされ、公開し直されます。4問未満になった場合は既存ファイルを上書きしません。
 
-点数が30〜3000点の候補だけを問題にします。それより多い候補は間引かずに除外します（陸地の形が浮かぶだけになるため）。各候補の点数と採否・除外理由は、Actionsの実行結果のサマリーに表として出ます。
+- 大きなデータはそのまま使わず、「出力1000MW以上の水力発電所」「氷・雪の滑走路がある飛行場」のように条件で絞ります。
+- 点数が30〜3000点の候補だけを問題にします。範囲外の候補は間引かずに除外します。
+- 分布が似た候補は機械的に除きます（点数の少ない方を残します）。
+- 地図に描いて目視で確認し、問題に向かない候補は`collect.py`の`EXCLUDE`に理由付きで登録します。
+- 各候補の点数と採否・除外理由は、実行ログとActionsのサマリーに表として出ます。
 
-**注意:** 自動収集で得られる問題数は未保証です。分布類似度による間引きのみ実装済みで、人間が判別可能かの審査は未実装です。国・地域で絞った空港問題は生成しません。現状のブラウザ側の「再収集」は実験用で、保存しても公開データは更新されません。
+国・地域で絞った問題は作りません（輪郭がそのまま答えになるため）。ブラウザ側の「再収集」は実験用で、保存しても公開データは更新されません。
 
-データ源: Wikidata (CC0)、airport-codes (各データの利用条件は提供元を確認)、海岸線はNatural Earth 1:110m (パブリックドメイン)。
+## データ源
+
+- 空港: [OurAirports](https://ourairports.com/data/)（パブリックドメイン）
+- 発電所: [WRI Global Power Plant Database](https://github.com/wri/global-power-plant-database)（CC BY 4.0）
+- 都市・港・山・海岸線: [Natural Earth](https://www.naturalearthdata.com/)（パブリックドメイン）
+- Wikidata（CC0）: Actions上でのみ取得します
