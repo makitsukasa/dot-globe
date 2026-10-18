@@ -20,6 +20,9 @@ NAME_COUNTRY_CAP=15      # 過半数が同じ国にある問題はその国ご�
 CLASS_MAX_COUNTRY_SHARE=.5
 # Wikidata全体と同じような分布（欧米に固まるだけ）の種類は除く。
 CLASS_MAX_BASE_SIMILARITY=.9
+# 派生問題の条件。
+CLASS_BUILT_BEFORE=(1000,1500,1800)
+CLASS_ELEVATION_AT_LEAST=(1000,2000,3000)
 # 地図で当てられる「もの」に限るため、これらのどれかの下位分類（P279*）にあたる種類だけを使う。
 # 「施設」「建築構造物」のような広い分類だと、店や部屋のようにWikidataの登録の偏り（欧米）が出るだけの種類が混ざるため、場所と結びつく分類に絞る。
 CLASS_ROOTS={
@@ -36,6 +39,40 @@ EXCLUDE={
  '世界の水上飛行場':'米国・カナダに偏り、定期便のある水上飛行場・ヘリポートと紛らわしい',
  '標高3000m以上の飛行場':'標高5000m以上の山とほぼ同じ分布（アンデスとチベット）',
  'コジェネレーション発電所':'WRIのデータが米国中心で、ほぼ米国のみ',
+ '楯状火山':'同じ意味の問題が既にある（盾状火山）',
+ '溶岩円頂丘':'同じ意味の問題が既にある（溶岩ドーム）',
+ 'スコリア丘':'同じ意味の問題が既にある（噴石丘）',
+ '首都':'同じ意味の問題が既にある（世界の首都）',
+ '州都':'同じ意味の問題が既にある（州都・県庁所在地など）',
+ 'プラヤ':'同じ意味の問題が既にある（干上がった湖（プラヤ））',
+ '海峡':'同じ意味の問題が既にある（主要な海峡）',
+ '諸島':'同じ意味の問題が既にある（主要な諸島）',
+ '人造湖':'同じ意味の問題が既にある（主要な人造湖）',
+ '大きな湾':'同じ意味の問題が既にある（大湾）',
+ 'バシリカ・マイナー':'同じ意味の問題が既にある（マイナー・バシリカ）',
+ '築城':'同じ意味の問題が既にある（要塞）',
+ '階':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '庭':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '並木':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '商店街':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ 'クラインガルテン':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '住宅地':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '街区':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '市街地':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '焼却施設':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '中心業務地区':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '都市的地域':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '宗教建築物':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '水域':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '海':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '線形公園':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ 'トレーラーパーク':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ 'ゲーテッドコミュニティ':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '王国会館':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ 'リフェクトリー':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '防空壕':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ '貯水槽':'場所との結びつきが弱く、Wikidataの登録の偏り（欧米）が出るだけ',
+ 'ユダヤ人ゲットーの建設':'出来事であって場所の種類ではない',
  '蓄電所':'WRIのデータが米国中心で、ほぼ米国のみ',
 }
 OURAIRPORTS='https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/'
@@ -238,15 +275,20 @@ def collect_wikidata_classes():
  allowed={row[0] for row in qlever(f'SELECT DISTINCT ?class WHERE {{ VALUES ?root {{ {roots} }} ?class wdt:P279* ?root }}') if row}
  classes={q:l for q,l in classes.items() if q in allowed}
  print('Wikidata classes under roots',len(classes),flush=True)
- coords=collections.defaultdict(dict);country=collections.defaultdict(dict)
+ coords=collections.defaultdict(dict);country=collections.defaultdict(dict);built=collections.defaultdict(dict);elevation=collections.defaultdict(dict)
  ids=sorted(classes)
  for start in range(0,len(ids),300):
   values=' '.join(ids[start:start+300])
-  rows=qlever(f'SELECT ?class ?item ?coord ?country WHERE {{ VALUES ?class {{ {values} }} ?item wdt:P31 ?class . ?item wdt:P625 ?coord . OPTIONAL {{ ?item wdt:P17 ?country }} }}')
+  rows=qlever(f'SELECT ?class ?item ?coord ?country ?built ?elevation WHERE {{ VALUES ?class {{ {values} }} ?item wdt:P31 ?class . ?item wdt:P625 ?coord . OPTIONAL {{ ?item wdt:P17 ?country }} OPTIONAL {{ ?item wdt:P571 ?built }} OPTIONAL {{ ?item wdt:P2044 ?elevation }} }}')
   if start==0:print('QLever sample rows',rows[:3],flush=True)
   for row in rows:
    p=wkt_point(row[2]) if len(row)>2 else None
-   if p:coords[row[0]][row[1]]=p;country[row[0]].setdefault(row[1],row[3] if len(row)>3 else '')
+   if not p:continue
+   coords[row[0]][row[1]]=p;country[row[0]].setdefault(row[1],row[3] if len(row)>3 else '')
+   m=re.match(r'"(-?\d+)-',row[4]) if len(row)>4 else None
+   if m:built[row[0]].setdefault(row[1],int(m.group(1)))
+   e=re.match(r'"?(-?[\d.]+)',row[5]) if len(row)>5 and row[5] else None
+   if e:elevation[row[0]].setdefault(row[1],float(e.group(1)))
  out=[]
  for qid,label in classes.items():
   items=coords.get(qid,{})
@@ -255,7 +297,16 @@ def collect_wikidata_classes():
   known=[c for c in country[qid].values() if c]
   top=collections.Counter(known).most_common(1)
   if top and top[0][1]>len(known)*CLASS_MAX_COUNTRY_SHARE:note(label,len(items),f'除外: 半数以上が1か国（{qid}）',quiet=True);continue
+  if label in EXCLUDE:note(label,len(items),'除外: '+EXCLUDE[label]);continue
   out.append((label,list(items.values())))
+  # 「〇〇な××」の派生問題。創建年（P571）と標高（P2044）で絞る。派生でも1か国に偏るものは除く。
+  variants=[(f'{year}年より前に作られた{label}',[i for i,y in built[qid].items() if y<year]) for year in CLASS_BUILT_BEFORE]
+  variants+=[(f'標高{meters}m以上の{label}',[i for i,h in elevation[qid].items() if h>=meters]) for meters in CLASS_ELEVATION_AT_LEAST]
+  for name,ids in variants:
+   known=[country[qid][i] for i in ids if country[qid].get(i)]
+   top=collections.Counter(known).most_common(1)
+   if top and top[0][1]>len(known)*CLASS_MAX_COUNTRY_SHARE:continue
+   out.append((name,[items[i] for i in ids]))
  return out
 def collect_place_names():
  """GeoNamesの地名から「〜dorfで終わる地名」のような問題の候補を作る。(問題名, 地点の添字の集合)の列と、各地点の(緯度, 経度)・国を返す。"""
