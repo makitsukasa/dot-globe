@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 # 目標の問題数。施設・自然などの問題を先に入れ、残りを地名パターンの問題で埋める。
 TARGET=1000
+# 地名パターンの問題は多くてもこの数まで。
+NAME_BUDGET=100
 # 点数がこの範囲外の候補は問題にしない。多すぎる候補は間引かずに除外する（陸地の形が浮かぶだけで推理にならないため）。
 # 大きなデータは「〇〇な××」の条件で絞って範囲に収める。点は0.1度単位に丸めて重複を除いた数で数える。
 MIN_POINTS=30
@@ -13,7 +15,10 @@ SIMILARITY_THRESHOLD=.95
 # 地名パターンの問題の選び方。
 NAME_MIN_POINTS=50
 NAME_TOP3_SHARE=.6       # 上位3か国に6割以上が集まる語尾・語頭だけ使う（言語圏が読み取れるもの）
-NAME_COUNTRY_CAP=60      # 過半数が同じ国にある問題はその国ごとに60問まで
+NAME_COUNTRY_CAP=15      # 過半数が同じ国にある問題はその国ごとに15問まで
+# Wikidataの「種類」（P31の値）から作る問題。1か国に偏った種類は国の輪郭が浮かぶだけなので除く。
+CLASS_MAX_COUNTRY_SHARE=.5
+QLEVER='https://qlever.cs.uni-freiburg.de/api/wikidata'
 NAME_MAX_JACCARD=.4      # 地点の4割以上が重なる問題は片方だけ
 NAME_LOOKALIKE_CAP=3     # 見た目がほぼ同じ分布（指紋の類似度.97以上）の問題は3問まで
 # 地図に描いて目視で確認し、問題に向かないと判断した候補。理由を必ず書く。
@@ -198,6 +203,37 @@ def collect_wikidata():
   except Exception as e:note(name,'-',f'取得失敗: {e}')
   time.sleep(1)
  return out
+def qlever(query):
+ """QLeverのWikidata窓口にSPARQLを投げ、TSVの行を返す。"""
+ prefixes='PREFIX wd: <http://www.wikidata.org/entity/> PREFIX wdt: <http://www.wikidata.org/prop/direct/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> '
+ req=urllib.request.Request(QLEVER,data=urllib.parse.urlencode({'query':prefixes+query}).encode(),headers={'User-Agent':'DotGlobeQuestionCollector/1.0 (GitHub Pages static dataset)','Accept':'text/tab-separated-values','Content-Type':'application/x-www-form-urlencoded'})
+ with urllib.request.urlopen(req,timeout=600) as r:lines=r.read().decode('utf-8').splitlines()
+ return [line.split('\t') for line in lines[1:]]
+def collect_wikidata_classes():
+ """日本語名のあるWikidataの種類のうち、座標付きの項目が範囲内の数あるものを候補にする。"""
+ classes={}
+ for qid,label,n in qlever('SELECT ?class ?label (COUNT(DISTINCT ?item) AS ?n) WHERE { ?item wdt:P31 ?class . ?item wdt:P625 ?coord . ?class rdfs:label ?label . FILTER(LANG(?label)="ja") } GROUP BY ?class ?label HAVING (COUNT(DISTINCT ?item) >= %d && COUNT(DISTINCT ?item) <= %d)'%(MIN_POINTS,MAX_POINTS*2)):
+  label=re.sub(r'^"|"@ja$','',label)
+  classes.setdefault(qid,label)
+ print('Wikidata classes in range',len(classes),flush=True)
+ coords=collections.defaultdict(dict);country=collections.defaultdict(dict)
+ ids=sorted(classes)
+ for start in range(0,len(ids),300):
+  values=' '.join(ids[start:start+300])
+  for row in qlever(f'SELECT ?class ?item ?coord ?country WHERE {{ VALUES ?class {{ {values} }} ?item wdt:P31 ?class . ?item wdt:P625 ?coord . OPTIONAL {{ ?item wdt:P17 ?country }} }}'):
+   if len(row)<3:continue
+   # 月や火星など地球以外の座標は "<天体のIRI> Point(...)" の形になるので、Point(...)だけのものを使う。
+   m=re.fullmatch(r'"Point\((-?[\d.eE+-]+) (-?[\d.eE+-]+)\)"(\^\^\S+)?',row[2])
+   if m:coords[row[0]][row[1]]=(float(m.group(2)),float(m.group(1)));country[row[0]].setdefault(row[1],row[3] if len(row)>3 else '')
+ out=[]
+ for qid,label in classes.items():
+  items=coords.get(qid,{})
+  if not items:continue
+  known=[c for c in country[qid].values() if c]
+  top=collections.Counter(known).most_common(1)
+  if top and top[0][1]>len(items)*CLASS_MAX_COUNTRY_SHARE:note(label,len(items),f'除外: 半数以上が1か国（{qid}）',quiet=True);continue
+  out.append((label,list(items.values())))
+ return out
 def collect_place_names():
  """GeoNamesの地名から「〜dorfで終わる地名」のような問題の候補を作る。(問題名, 地点の添字の集合)の列と、各地点の(緯度, 経度)・国を返す。"""
  with tarfile.open(fileobj=io.BytesIO(get(CITIES))) as tar:cities=json.load(tar.extractfile('package/cities.json'))
@@ -249,11 +285,12 @@ def write_summary(kept):
  path=os.environ.get('GITHUB_STEP_SUMMARY')
  if not path:return
  lines=[f'## 問題データ: {len(kept)}問',f'点数の範囲: {MIN_POINTS}〜{MAX_POINTS}（0.1度単位で重複を除いた数）','','| 候補 | 点数 | 結果 |','|---|---:|---|']
- lines+=[f'| {n} | {c} | {r} |' for n,c,r in report]
+ # Actionsのサマリーは1MBまでなので、長すぎる表は切り詰める。
+ lines+=[f'| {n} | {c} | {r} |' for n,c,r in report[:3000]]
  with open(path,'a',encoding='utf-8') as f:f.write('\n'.join(lines)+'\n')
 def main():
  candidates=[]
- for fn in (collect_airports,collect_power_plants,collect_natural_earth,collect_earth,collect_wikidata):
+ for fn in (collect_airports,collect_power_plants,collect_natural_earth,collect_earth,collect_wikidata,collect_wikidata_classes):
   try:
    for name,coords in fn():
     if name in EXCLUDE:note(name,len(coords),'除外: '+EXCLUDE[name]);continue
@@ -269,7 +306,7 @@ def main():
   similar=[kept[i]['name'] for i,other in enumerate(fps) if similarity(fp,other)>=SIMILARITY_THRESHOLD]
   if similar:note(item['name'],len(item['points']),f'除外: {similar[0]}と分布が類似');continue
   kept.append(item);fps.append(fp);note(item['name'],len(item['points']),'採用')
- try:kept+=select_place_names(TARGET-len(kept),fps)
+ try:kept+=select_place_names(min(NAME_BUDGET,TARGET-len(kept)),fps)
  except Exception as e:note('地名パターン','-',f'取得失敗: {e}')
  write_summary(kept)
  if len(kept)<4:raise SystemExit('Insufficient validated sources: no overwrite of existing questions.json')
