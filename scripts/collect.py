@@ -21,7 +21,12 @@ CLASS_MAX_COUNTRY_SHARE=.5
 # Wikidata全体と同じような分布（欧米に固まるだけ）の種類は除く。
 CLASS_MAX_BASE_SIMILARITY=.9
 # 地図で当てられる「もの」に限るため、これらのどれかの下位分類（P279*）にあたる種類だけを使う。
-CLASS_ROOTS={'Q618123':'地理的な地物','Q811979':'建築構造物','Q13226383':'施設'}
+# 「施設」「建築構造物」のような広い分類だと、店や部屋のようにWikidataの登録の偏り（欧米）が出るだけの種類が混ざるため、場所と結びつく分類に絞る。
+CLASS_ROOTS={
+ 'Q271669':'地形','Q15324':'水域','Q35145263':'自然地理的な物体','Q8072':'火山','Q473972':'保護区','Q35509':'洞窟','Q34038':'滝','Q23442':'島','Q35666':'氷河',
+ 'Q24398318':'宗教建築','Q839954':'遺跡','Q57821':'要塞','Q23413':'城','Q12516':'ピラミッド','Q486972':'集落',
+ 'Q820477':'鉱山','Q159719':'発電所','Q12323':'ダム','Q39715':'灯台','Q1248784':'空港','Q44782':'港','Q62832':'天文台','Q130003':'スキー場','Q194188':'宇宙港',
+}
 QLEVER='https://qlever.cs.uni-freiburg.de/api/wikidata'
 NAME_MAX_JACCARD=.4      # 地点の4割以上が重なる問題は片方だけ
 NAME_LOOKALIKE_CAP=3     # 見た目がほぼ同じ分布（指紋の類似度.97以上）の問題は3問まで
@@ -246,9 +251,10 @@ def collect_wikidata_classes():
  for qid,label in classes.items():
   items=coords.get(qid,{})
   if not items:continue
+  # 国（P17）がわかっている項目の中で、1か国が半数を超える種類は除く。
   known=[c for c in country[qid].values() if c]
   top=collections.Counter(known).most_common(1)
-  if top and top[0][1]>len(items)*CLASS_MAX_COUNTRY_SHARE:note(label,len(items),f'除外: 半数以上が1か国（{qid}）',quiet=True);continue
+  if top and top[0][1]>len(known)*CLASS_MAX_COUNTRY_SHARE:note(label,len(items),f'除外: 半数以上が1か国（{qid}）',quiet=True);continue
   out.append((label,list(items.values())))
  return out
 def collect_place_names():
